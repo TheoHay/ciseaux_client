@@ -1,8 +1,9 @@
-pub mod clients;
+//! This is a simple Redis Pool, currently supporting only a connection pool to a Single Redis instance
+//! If you want to understand how to use it, see examples and/or CiseauxSingle
 
-pub const DEFAULT_CONN_PER_THREAD: usize = 4;
+pub use redis;
 
-pub enum CiseauxError {
-    NetworkError,
-    CommandError,
-}
+mod single;
+pub use single::CiseauxSingle;
+
+const DEFAULT_CONN_PER_THREAD: usize = 4;

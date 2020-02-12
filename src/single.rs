@@ -1,4 +1,3 @@
-use crate::CiseauxError;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -7,6 +6,7 @@ use tokio::sync::{Mutex, MutexGuard};
 
 use redis::RedisError;
 
+#[derive(Clone)]
 pub struct CiseauxSingle {
     client: Arc<redis::Client>,
     conns: Arc<Vec<Arc<Mutex<redis::aio::Connection>>>>,
@@ -14,6 +14,8 @@ pub struct CiseauxSingle {
 }
 
 impl CiseauxSingle {
+    /// Creates a new redis pool instance from redis-rs library Client struct (use ciseaux_client::redis or add redis to you depencies)
+    /// Count change the number of connections for this pool, by default (When None is provided), it creates 4 connections per CPU cores
     pub async fn new(
         client: redis::Client,
         count: Option<usize>,
@@ -37,6 +39,7 @@ impl CiseauxSingle {
         })
     }
 
+    /// This will query a redis::Cmd, but in case of network error, will try to reconnect once to the same database, then fail the command.
     pub async fn query_cmd<T: redis::FromRedisValue>(
         &self,
         cmd: &redis::Cmd,
@@ -63,6 +66,7 @@ impl CiseauxSingle {
         }
     }
 
+    /// Same that query_cmd, but with a redis::Pipeline
     pub async fn query_pipe<T: redis::FromRedisValue>(
         &self,
         pipe: &redis::Pipeline,

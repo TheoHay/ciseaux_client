@@ -1,2 +1,4 @@
 /target
 Cargo.lock
+/examples/basic/target
+/examples/basic/Cargo.lock

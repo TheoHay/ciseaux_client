@@ -1,7 +1,14 @@
 [package]
 name = "ciseaux_client"
+description = "Just a Redis Pool implementation"
 version = "0.1.0"
 authors = ["TheoHay <priv.theohay@gmail.com>"]
+keywords = ["redis"]
+homepage = "https://github.com/TheoHay/ciseaux_client"
+repository = "https://github.com/TheoHay/ciseaux_client"
+documentation = "https://docs.rs/ciseaux_client"
+license = "MIT"
+readme = "README.md"
 edition = "2018"
 
 [dependencies]
