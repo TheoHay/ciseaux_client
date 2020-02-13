@@ -15,7 +15,7 @@ pub struct CiseauxSingle {
 
 impl CiseauxSingle {
     /// Creates a new redis pool instance from redis-rs library Client struct (use ciseaux_client::redis or add redis to you depencies)
-    /// Count change the number of connections for this pool, by default (When None is provided), it creates 4 connections per CPU cores
+    /// conns_count change the number of connections for this pool, by default (When None is provided), it creates 4 connections per CPU cores
     pub async fn new(
         client: redis::Client,
         conns_count: Option<usize>,
