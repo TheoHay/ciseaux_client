@@ -18,17 +18,17 @@ impl CiseauxSingle {
     /// Count change the number of connections for this pool, by default (When None is provided), it creates 4 connections per CPU cores
     pub async fn new(
         client: redis::Client,
-        count: Option<usize>,
+        conns_count: Option<usize>,
     ) -> Result<CiseauxSingle, redis::RedisError> {
-        let count = match count {
+        let conns_count = match conns_count {
             Some(v) => v,
             None => num_cpus::get() * crate::DEFAULT_CONN_PER_THREAD,
         };
-        let mut conns_fut = Vec::with_capacity(count);
-        for _ in 0..count {
+        let mut conns_fut = Vec::with_capacity(conns_count);
+        for _ in 0..conns_count {
             conns_fut.push(client.get_async_connection());
         }
-        let mut conns = Vec::with_capacity(count);
+        let mut conns = Vec::with_capacity(conns_count);
         for c in futures::future::join_all(conns_fut).await {
             conns.push(Arc::new(Mutex::new(c?)));
         }
