@@ -1,45 +1,96 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use crate::{ConnectionsCount, ReconnectBehavior};
+
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 use tokio::sync::{Mutex, MutexGuard};
 
 use redis::RedisError;
 
-#[derive(Clone)]
-pub struct CiseauxSingle {
-    client: Arc<redis::Client>,
-    conns: Arc<Vec<Arc<Mutex<redis::aio::Connection>>>>,
-    next: Arc<AtomicUsize>,
+pub struct SingleBuilder {
+    client: redis::Client,
+    conns_count: Option<ConnectionsCount>,
+    reconnect_behavior: Option<ReconnectBehavior>,
 }
 
-impl CiseauxSingle {
-    /// Creates a new redis pool instance from redis-rs library Client struct (use ciseaux_client::redis or add redis to you depencies)
-    /// conns_count change the number of connections for this pool, by default (When None is provided), it creates 4 connections per CPU cores
-    pub async fn new(
-        client: redis::Client,
-        conns_count: Option<usize>,
-    ) -> Result<CiseauxSingle, redis::RedisError> {
-        let conns_count = match conns_count {
-            Some(v) => v,
+impl SingleBuilder {
+    /// Use this to create a CiseauxSingle struct, client must be a redis::Client (from redis-rs)
+    pub fn new(client: redis::Client) -> SingleBuilder {
+        SingleBuilder {
+            client,
+            conns_count: None,
+            reconnect_behavior: None,
+        }
+    }
+
+    /// Changes the number of connections in the pool.
+    /// Default is 4 per threads
+    pub fn set_conns_count(mut self, conns_count: ConnectionsCount) -> SingleBuilder {
+        self.conns_count = Some(conns_count);
+        self
+    }
+
+    /// Change the reconnect behavior.
+    /// Default is one ReconnectBehavior::InstantRetry
+    pub fn set_reconnect_behavior(
+        mut self,
+        reconnect_behavior: ReconnectBehavior,
+    ) -> SingleBuilder {
+        self.reconnect_behavior = Some(reconnect_behavior);
+        self
+    }
+
+    pub async fn build(self) -> Result<CiseauxSingle, RedisError> {
+        let conns_count = match self.conns_count {
+            Some(v) => match v {
+                ConnectionsCount::Global(v) => v,
+                ConnectionsCount::PerThread(v) => num_cpus::get() * v,
+            },
             None => num_cpus::get() * crate::DEFAULT_CONN_PER_THREAD,
         };
         let mut conns_fut = Vec::with_capacity(conns_count);
         for _ in 0..conns_count {
-            conns_fut.push(client.get_async_connection());
+            conns_fut.push(self.client.get_async_connection());
         }
         let mut conns = Vec::with_capacity(conns_count);
         for c in futures::future::join_all(conns_fut).await {
             conns.push(Arc::new(Mutex::new(c?)));
         }
         Ok(CiseauxSingle {
-            client: Arc::new(client),
+            client: Arc::new(self.client),
+            reconnect_behavior: Arc::new(match self.reconnect_behavior {
+                Some(v) => v,
+                None => ReconnectBehavior::InstantRetry,
+            }),
             conns: Arc::new(conns),
             next: Arc::new(AtomicUsize::new(0)),
         })
     }
+}
 
-    /// This will query a redis::Cmd, but in case of network error, will try to reconnect once to the same database, then fail the command.
+#[derive(Clone)]
+pub struct CiseauxSingle {
+    client: Arc<redis::Client>,
+    reconnect_behavior: Arc<ReconnectBehavior>,
+    conns: Arc<Vec<Arc<Mutex<redis::aio::Connection>>>>,
+    next: Arc<AtomicUsize>,
+}
+
+impl CiseauxSingle {
+    pub fn builder(client: redis::Client) -> SingleBuilder {
+        SingleBuilder::new(client)
+    }
+
+    /// Create a new pool using the builder's defaults
+    pub async fn new(client: redis::Client) -> Result<CiseauxSingle, RedisError> {
+        SingleBuilder::new(client).build().await
+    }
+
+    /// Asynchronously query a redis::Cmd, but in case of network error, will try to reconnect once to the same database, then fail the command.
     pub async fn query_cmd<T: redis::FromRedisValue>(
         &self,
         cmd: &redis::Cmd,
