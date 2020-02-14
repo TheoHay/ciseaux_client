@@ -28,13 +28,4 @@ pub enum ReconnectBehavior {
     InstantRetry,
     /// Try to reconnect, but on fail, it will wait (2 seconds by default), then try again, if it keeps failing, then return a RedisError
     RetryWaitRetry(Option<Duration>),
-    /// Use this when you need a full custom behavior, you can toggle off instant retry and change the number of retries, and delay between them
-    Custom {
-        instant_retry: bool,
-        delays: Option<Vec<Duration>>,
-    },
-    /// Infinite will try to reconnect instantly, and on fail, try to reconnect after a delay (2 seconds by default)
-    /// It's like an infinite loop, use this only if you can't fail a query and you can wait for it.
-    /// But, for example, on a web server, you will accumulate requests/connections and may run out of memory.
-    Infinite(Option<Duration>),
 }

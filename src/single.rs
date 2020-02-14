@@ -104,12 +104,61 @@ impl CiseauxSingle {
         {
             Ok(v) => Ok(v),
             Err(e) => {
-                if e.is_timeout() || e.is_connection_dropped() || e.is_io_error() {
-                    match self.try_reconnect(conn).await {
-                        Ok(mut c) => {
-                            return cmd.query_async::<redis::aio::Connection, T>(&mut c).await
+                if is_network_or_io_error(&e) {
+                    match *self.reconnect_behavior {
+                        ReconnectBehavior::NoReconnect => return Err(e),
+                        ReconnectBehavior::InstantRetry => match self.try_reconnect(conn).await {
+                            Ok(mut c) => {
+                                return cmd.query_async::<redis::aio::Connection, T>(&mut c).await
+                            }
+                            Err((e, _)) => return Err(e),
+                        },
+                        ReconnectBehavior::RetryWaitRetry(d) => {
+                            match self.try_reconnect(conn).await {
+                                Ok(mut c) => {
+                                    match cmd.query_async::<redis::aio::Connection, T>(&mut c).await
+                                    {
+                                        Ok(v) => return Ok(v),
+                                        Err(e) => {
+                                            if is_network_or_io_error(&e) {
+                                                tokio::time::delay_for(
+                                                    d.unwrap_or(Duration::from_secs(2)),
+                                                )
+                                                .await;
+                                                match self.try_reconnect(c).await {
+                                                    Ok(mut c) => return cmd
+                                                        .query_async::<redis::aio::Connection, T>(
+                                                            &mut c,
+                                                        )
+                                                        .await,
+                                                    Err((e, _)) => return Err(e),
+                                                }
+                                            } else {
+                                                return Err(e);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err((e, c)) => {
+                                    if is_network_or_io_error(&e) {
+                                        tokio::time::delay_for(d.unwrap_or(Duration::from_secs(2)))
+                                            .await;
+                                        match self.try_reconnect(c).await {
+                                            Ok(mut c) => {
+                                                return cmd
+                                                    .query_async::<redis::aio::Connection, T>(
+                                                        &mut c,
+                                                    )
+                                                    .await
+                                            }
+                                            Err((e, _)) => return Err(e),
+                                        }
+                                    } else {
+                                        return Err(e);
+                                    }
+                                }
+                            }
                         }
-                        Err(e) => return Err(e),
                     }
                 }
                 return Err(e);
@@ -131,12 +180,63 @@ impl CiseauxSingle {
         {
             Ok(v) => Ok(v),
             Err(e) => {
-                if e.is_timeout() || e.is_connection_dropped() || e.is_io_error() {
-                    match self.try_reconnect(conn).await {
-                        Ok(mut c) => {
-                            return pipe.query_async::<redis::aio::Connection, T>(&mut c).await
+                if is_network_or_io_error(&e) {
+                    match *self.reconnect_behavior {
+                        ReconnectBehavior::NoReconnect => return Err(e),
+                        ReconnectBehavior::InstantRetry => match self.try_reconnect(conn).await {
+                            Ok(mut c) => {
+                                return pipe.query_async::<redis::aio::Connection, T>(&mut c).await
+                            }
+                            Err((e, _)) => return Err(e),
+                        },
+                        ReconnectBehavior::RetryWaitRetry(d) => {
+                            match self.try_reconnect(conn).await {
+                                Ok(mut c) => {
+                                    match pipe
+                                        .query_async::<redis::aio::Connection, T>(&mut c)
+                                        .await
+                                    {
+                                        Ok(v) => return Ok(v),
+                                        Err(e) => {
+                                            if is_network_or_io_error(&e) {
+                                                tokio::time::delay_for(
+                                                    d.unwrap_or(Duration::from_secs(2)),
+                                                )
+                                                .await;
+                                                match self.try_reconnect(c).await {
+                                                    Ok(mut c) => return pipe
+                                                        .query_async::<redis::aio::Connection, T>(
+                                                            &mut c,
+                                                        )
+                                                        .await,
+                                                    Err((e, _)) => return Err(e),
+                                                }
+                                            } else {
+                                                return Err(e);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err((e, c)) => {
+                                    if is_network_or_io_error(&e) {
+                                        tokio::time::delay_for(d.unwrap_or(Duration::from_secs(2)))
+                                            .await;
+                                        match self.try_reconnect(c).await {
+                                            Ok(mut c) => {
+                                                return pipe
+                                                    .query_async::<redis::aio::Connection, T>(
+                                                        &mut c,
+                                                    )
+                                                    .await
+                                            }
+                                            Err((e, _)) => return Err(e),
+                                        }
+                                    } else {
+                                        return Err(e);
+                                    }
+                                }
+                            }
                         }
-                        Err(e) => return Err(e),
                     }
                 }
                 return Err(e);
@@ -147,13 +247,23 @@ impl CiseauxSingle {
     async fn try_reconnect<'a>(
         &self,
         mut conn: MutexGuard<'a, redis::aio::Connection>,
-    ) -> Result<MutexGuard<'a, redis::aio::Connection>, RedisError> {
+    ) -> Result<
+        MutexGuard<'a, redis::aio::Connection>,
+        (RedisError, MutexGuard<'a, redis::aio::Connection>),
+    > {
         match self.client.get_async_connection().await {
             Ok(c) => {
                 *conn = c;
                 Ok(conn)
             }
-            Err(e) => Err(e),
+            Err(e) => Err((e, conn)),
         }
     }
+}
+
+fn is_network_or_io_error(error: &RedisError) -> bool {
+    if error.is_timeout() || error.is_connection_dropped() || error.is_io_error() {
+        return true;
+    }
+    false
 }
