@@ -3,7 +3,7 @@ use ciseaux_client::redis;
 #[tokio::main]
 async fn main() -> Result<(), redis::RedisError> {
     let client = redis::Client::open("redis://127.0.0.1")?;
-    let pool = ciseaux_client::CiseauxSingle::new(client, None).await?;
+    let pool = ciseaux_client::CiseauxSingle::new(client).await?;
     // Now create a command, and query it
     pool.query_cmd(
         redis::cmd("SET")
