@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, MutexGuard};
 
 use redis::RedisError;
 
+/// A builder to customize CiseauxSingle
 pub struct SingleBuilder {
     client: redis::Client,
     conns_count: Option<ConnectionsCount>,

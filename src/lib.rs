@@ -7,6 +7,7 @@ pub use redis;
 
 mod single;
 pub use single::CiseauxSingle;
+pub use single::SingleBuilder;
 
 use std::time::Duration;
 
