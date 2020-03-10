@@ -5,7 +5,10 @@
 
 pub use redis;
 
+mod cluster;
 mod single;
+pub use cluster::CiseauxCluster;
+pub use cluster::ClusterBuilder;
 pub use single::CiseauxSingle;
 pub use single::SingleBuilder;
 

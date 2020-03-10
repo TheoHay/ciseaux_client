@@ -59,7 +59,7 @@ impl SingleBuilder {
         }
         let mut conns = Vec::with_capacity(conns_count);
         for c in futures::future::join_all(conns_fut).await {
-            conns.push(Arc::new(Mutex::new(c?)));
+            conns.push(Mutex::new(c?));
         }
         Ok(CiseauxSingle {
             client: Arc::new(self.client),
@@ -77,7 +77,7 @@ impl SingleBuilder {
 pub struct CiseauxSingle {
     client: Arc<redis::Client>,
     reconnect_behavior: Arc<ReconnectBehavior>,
-    conns: Arc<Vec<Arc<Mutex<redis::aio::Connection>>>>,
+    conns: Arc<Vec<Mutex<redis::aio::Connection>>>,
     next: Arc<AtomicUsize>,
 }
 

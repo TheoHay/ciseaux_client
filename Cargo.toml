@@ -1,7 +1,7 @@
 [package]
 name = "ciseaux_client"
 description = "Just a Redis Pool implementation"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["TheoHay <priv.theohay@gmail.com>"]
 keywords = ["redis", "async"]
 homepage = "https://github.com/TheoHay/ciseaux_client"
