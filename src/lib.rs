@@ -119,6 +119,16 @@ impl QueryAble for &redis::Cmd {
 }
 
 #[async_trait::async_trait]
+impl QueryAble for &mut redis::Cmd {
+    async fn query<T: redis::FromRedisValue>(
+        &self,
+        conn: &mut redis::aio::Connection,
+    ) -> Result<T, redis::RedisError> {
+        self.query_async::<redis::aio::Connection, T>(conn).await
+    }
+}
+
+#[async_trait::async_trait]
 impl QueryAble for redis::Pipeline {
     async fn query<T: redis::FromRedisValue>(
         &self,
@@ -130,6 +140,16 @@ impl QueryAble for redis::Pipeline {
 
 #[async_trait::async_trait]
 impl QueryAble for &redis::Pipeline {
+    async fn query<T: redis::FromRedisValue>(
+        &self,
+        conn: &mut redis::aio::Connection,
+    ) -> Result<T, redis::RedisError> {
+        self.query_async::<redis::aio::Connection, T>(conn).await
+    }
+}
+
+#[async_trait::async_trait]
+impl QueryAble for &mut redis::Pipeline {
     async fn query<T: redis::FromRedisValue>(
         &self,
         conn: &mut redis::aio::Connection,
