@@ -109,6 +109,20 @@ impl CiseauxSingle {
     }
 
     #[inline(always)]
+    async fn try_reconnect<'a>(
+        &self,
+        conn: &mut MutexGuard<'a, redis::aio::Connection>,
+    ) -> Result<(), RedisError> {
+        match self.client.get_async_connection().await {
+            Ok(c) => {
+                **conn = c;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    #[inline(always)]
     async fn retry_cmd<'a, C: QueryAble, T: redis::FromRedisValue>(
         &self,
         conn: &mut MutexGuard<'a, redis::aio::Connection>,
@@ -130,20 +144,6 @@ impl CiseauxSingle {
                 }
                 return Err(e);
             }
-        }
-    }
-
-    #[inline(always)]
-    async fn try_reconnect<'a>(
-        &self,
-        conn: &mut MutexGuard<'a, redis::aio::Connection>,
-    ) -> Result<(), RedisError> {
-        match self.client.get_async_connection().await {
-            Ok(c) => {
-                **conn = c;
-                Ok(())
-            }
-            Err(e) => Err(e),
         }
     }
 }

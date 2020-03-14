@@ -8,7 +8,7 @@
 //! ciseaux_client = "0.3"
 //! ```
 //!
-//! # Examples
+//! # Example
 //!
 //! Create a connection pool default settings and the provided redis::Client (from [redis-rs](https://crates.io/crates/redis))
 //!
@@ -19,9 +19,9 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     let redis_client = Client::open("redis://127.0.0.1:6379").unwrap();
-//!     let db_pool = CiseauxSingle::new(redis_client).await.expect("Failed to create CiseauxSingle");
+//!     let db_pool = CiseauxSingle::new(redis_client).await.expect("Failed to create Pool");
 //!     // You can safely share CiseauxSingle between threads
-//!     // since it use Arc and Mutexes under the hood)
+//!     // since it use Arcs and Mutexes under the hood)
 //!     let res = match db_pool.query::<_, Option<String>>(&redis::Cmd::get("hello")).await {
 //!         Ok(v) => v,
 //!         Err(e) => return,// Handle Error
