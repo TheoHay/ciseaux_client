@@ -1,58 +1,47 @@
-use crate::{ConnectionsCount, ReconnectBehavior};
+use crate::{ConnectionsCount, QueryAble, ReconnectBehavior};
 
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 use tokio::sync::{Mutex, MutexGuard};
 
 use redis::RedisError;
 
-/// A builder to customize CiseauxSingle
-pub struct SingleBuilder {
-    client: redis::Client,
-    conns_count: Option<ConnectionsCount>,
-    reconnect_behavior: Option<ReconnectBehavior>,
+/// An Init Struct to create a customized CiseauxSingle connections pool.
+/// This is like a Builder, but using public fields instead of functions
+#[derive(Debug)]
+pub struct SingleInit {
+    /// The redis-rs Client CiseauxSingle will use
+    pub client: redis::Client,
+    /// By default, 4 connections per Thread
+    pub conns_count: ConnectionsCount,
+    /// By default, Instant Retry
+    pub reconnect_behavior: ReconnectBehavior,
 }
 
-impl SingleBuilder {
-    /// Use this to create a CiseauxSingle struct, client must be a redis::Client (from redis-rs)
-    pub fn new(client: redis::Client) -> SingleBuilder {
-        SingleBuilder {
+impl SingleInit {
+    /// This create a SingleInit with default settings and the provided redis::Client
+    pub fn new(client: redis::Client) -> SingleInit {
+        SingleInit {
             client,
-            conns_count: None,
-            reconnect_behavior: None,
+            conns_count: ConnectionsCount::default(),
+            reconnect_behavior: ReconnectBehavior::default(),
         }
     }
 
-    /// Changes the number of connections in the pool.
-    /// Default is 4 per threads
-    pub fn set_conns_count(mut self, conns_count: ConnectionsCount) -> SingleBuilder {
-        self.conns_count = Some(conns_count);
-        self
+    /// Like SingleInit::new, but also opens a redis::Client on localhost (With redis default port : 6379)
+    pub fn default_localhost() -> SingleInit {
+        SingleInit {
+            client: redis::Client::open("redis://127.0.0.1:6379").unwrap(), // Unwrap is OK since client open doesn't connect, but only checks URL Validity.
+            conns_count: ConnectionsCount::default(),
+            reconnect_behavior: ReconnectBehavior::default(),
+        }
     }
 
-    /// Change the reconnect behavior.
-    /// Default is one ReconnectBehavior::InstantRetry
-    pub fn set_reconnect_behavior(
-        mut self,
-        reconnect_behavior: ReconnectBehavior,
-    ) -> SingleBuilder {
-        self.reconnect_behavior = Some(reconnect_behavior);
-        self
-    }
-
+    /// Asynchronously creates multiple connexions to a Redis instance
     pub async fn build(self) -> Result<CiseauxSingle, RedisError> {
-        let conns_count = match self.conns_count {
-            Some(v) => match v {
-                ConnectionsCount::Global(v) => v,
-                ConnectionsCount::PerThread(v) => num_cpus::get() * v,
-            },
-            None => num_cpus::get() * crate::DEFAULT_CONN_PER_THREAD,
-        };
+        let conns_count = self.conns_count.into_flat();
         let mut conns_fut = Vec::with_capacity(conns_count);
         for _ in 0..conns_count {
             conns_fut.push(self.client.get_async_connection());
@@ -63,103 +52,80 @@ impl SingleBuilder {
         }
         Ok(CiseauxSingle {
             client: Arc::new(self.client),
-            reconnect_behavior: Arc::new(match self.reconnect_behavior {
-                Some(v) => v,
-                None => ReconnectBehavior::InstantRetry,
-            }),
+            reconnect_behavior: self.reconnect_behavior,
             conns: Arc::new(conns),
             next: Arc::new(AtomicUsize::new(0)),
         })
     }
 }
 
+/// A connections pool to a single Redis instance
 #[derive(Clone)]
 pub struct CiseauxSingle {
     client: Arc<redis::Client>,
-    reconnect_behavior: Arc<ReconnectBehavior>,
+    reconnect_behavior: ReconnectBehavior,
     conns: Arc<Vec<Mutex<redis::aio::Connection>>>,
     next: Arc<AtomicUsize>,
 }
 
 impl CiseauxSingle {
-    pub fn builder(client: redis::Client) -> SingleBuilder {
-        SingleBuilder::new(client)
+    /// Shortcut to SingleInit::new
+    pub fn builder(client: redis::Client) -> SingleInit {
+        SingleInit::new(client)
     }
 
-    /// Create a new pool using the builder's defaults
+    /// Shortcut to SingleInit::new
+    pub fn init(client: redis::Client) -> SingleInit {
+        SingleInit::new(client)
+    }
+
+    /// Create a new pool using defaults settings
     pub async fn new(client: redis::Client) -> Result<CiseauxSingle, RedisError> {
-        SingleBuilder::new(client).build().await
+        SingleInit::new(client).build().await
     }
 
-    /// Asynchronously query a redis::Cmd, but in case of network error, will try to reconnect once to the same database, then fail the command.
-    pub async fn query_cmd<T: redis::FromRedisValue>(
+    /// Asynchronously query QueryAble (trait, implemented for redis::Cmd and redis::Pipeline),
+    /// but in case of network error, will try to reconnect once to the same database (by default),
+    /// or follow the reconnect_behavior you provided
+    pub async fn query<C: QueryAble, T: redis::FromRedisValue>(
         &self,
-        cmd: &redis::Cmd,
+        cmd: C,
     ) -> Result<T, RedisError> {
         let mut conn = self.conns[self.next.fetch_add(1, Ordering::AcqRel) % self.conns.len()]
             .lock()
             .await;
-        match cmd
-            .query_async::<redis::aio::Connection, T>(&mut conn)
-            .await
-        {
+        match cmd.query::<T>(&mut conn).await {
             Ok(v) => Ok(v),
             Err(e) => {
                 if is_network_or_io_error(&e) {
-                    match *self.reconnect_behavior {
-                        ReconnectBehavior::NoReconnect => return Err(e),
-                        ReconnectBehavior::InstantRetry => match self.try_reconnect(conn).await {
-                            Ok(mut c) => {
-                                return cmd.query_async::<redis::aio::Connection, T>(&mut c).await
-                            }
-                            Err((e, _)) => return Err(e),
-                        },
+                    if self.reconnect_behavior == ReconnectBehavior::NoReconnect {
+                        return Err(e);
+                    }
+                    return self.retry_cmd(&mut conn, cmd).await;
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    #[inline(always)]
+    async fn retry_cmd<'a, C: QueryAble, T: redis::FromRedisValue>(
+        &self,
+        conn: &mut MutexGuard<'a, redis::aio::Connection>,
+        cmd: C,
+    ) -> Result<T, RedisError> {
+        match self.try_reconnect(conn).await {
+            Ok(()) => return cmd.query::<T>(conn).await,
+            Err(e) => {
+                if is_network_or_io_error(&e) {
+                    match self.reconnect_behavior {
                         ReconnectBehavior::RetryWaitRetry(d) => {
-                            match self.try_reconnect(conn).await {
-                                Ok(mut c) => {
-                                    match cmd.query_async::<redis::aio::Connection, T>(&mut c).await
-                                    {
-                                        Ok(v) => return Ok(v),
-                                        Err(e) => {
-                                            if is_network_or_io_error(&e) {
-                                                tokio::time::delay_for(
-                                                    d.unwrap_or(Duration::from_secs(2)),
-                                                )
-                                                .await;
-                                                match self.try_reconnect(c).await {
-                                                    Ok(mut c) => return cmd
-                                                        .query_async::<redis::aio::Connection, T>(
-                                                            &mut c,
-                                                        )
-                                                        .await,
-                                                    Err((e, _)) => return Err(e),
-                                                }
-                                            } else {
-                                                return Err(e);
-                                            }
-                                        }
-                                    }
-                                }
-                                Err((e, c)) => {
-                                    if is_network_or_io_error(&e) {
-                                        tokio::time::delay_for(d.unwrap_or(Duration::from_secs(2)))
-                                            .await;
-                                        match self.try_reconnect(c).await {
-                                            Ok(mut c) => {
-                                                return cmd
-                                                    .query_async::<redis::aio::Connection, T>(
-                                                        &mut c,
-                                                    )
-                                                    .await
-                                            }
-                                            Err((e, _)) => return Err(e),
-                                        }
-                                    } else {
-                                        return Err(e);
-                                    }
-                                }
-                            }
+                            tokio::time::delay_for(d.unwrap_or(crate::DEFAULT_WAIT_RETRY_DUR))
+                                .await;
+                            self.try_reconnect(conn).await?;
+                            return cmd.query::<T>(conn).await;
                         }
+                        _ => return Err(e),
                     }
                 }
                 return Err(e);
@@ -167,97 +133,17 @@ impl CiseauxSingle {
         }
     }
 
-    /// Same that query_cmd, but with a redis::Pipeline
-    pub async fn query_pipe<T: redis::FromRedisValue>(
-        &self,
-        pipe: &redis::Pipeline,
-    ) -> Result<T, RedisError> {
-        let mut conn = self.conns[self.next.fetch_add(1, Ordering::AcqRel) % self.conns.len()]
-            .lock()
-            .await;
-        match pipe
-            .query_async::<redis::aio::Connection, T>(&mut conn)
-            .await
-        {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                if is_network_or_io_error(&e) {
-                    match *self.reconnect_behavior {
-                        ReconnectBehavior::NoReconnect => return Err(e),
-                        ReconnectBehavior::InstantRetry => match self.try_reconnect(conn).await {
-                            Ok(mut c) => {
-                                return pipe.query_async::<redis::aio::Connection, T>(&mut c).await
-                            }
-                            Err((e, _)) => return Err(e),
-                        },
-                        ReconnectBehavior::RetryWaitRetry(d) => {
-                            match self.try_reconnect(conn).await {
-                                Ok(mut c) => {
-                                    match pipe
-                                        .query_async::<redis::aio::Connection, T>(&mut c)
-                                        .await
-                                    {
-                                        Ok(v) => return Ok(v),
-                                        Err(e) => {
-                                            if is_network_or_io_error(&e) {
-                                                tokio::time::delay_for(
-                                                    d.unwrap_or(Duration::from_secs(2)),
-                                                )
-                                                .await;
-                                                match self.try_reconnect(c).await {
-                                                    Ok(mut c) => return pipe
-                                                        .query_async::<redis::aio::Connection, T>(
-                                                            &mut c,
-                                                        )
-                                                        .await,
-                                                    Err((e, _)) => return Err(e),
-                                                }
-                                            } else {
-                                                return Err(e);
-                                            }
-                                        }
-                                    }
-                                }
-                                Err((e, c)) => {
-                                    if is_network_or_io_error(&e) {
-                                        tokio::time::delay_for(d.unwrap_or(Duration::from_secs(2)))
-                                            .await;
-                                        match self.try_reconnect(c).await {
-                                            Ok(mut c) => {
-                                                return pipe
-                                                    .query_async::<redis::aio::Connection, T>(
-                                                        &mut c,
-                                                    )
-                                                    .await
-                                            }
-                                            Err((e, _)) => return Err(e),
-                                        }
-                                    } else {
-                                        return Err(e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                return Err(e);
-            }
-        }
-    }
-
+    #[inline(always)]
     async fn try_reconnect<'a>(
         &self,
-        mut conn: MutexGuard<'a, redis::aio::Connection>,
-    ) -> Result<
-        MutexGuard<'a, redis::aio::Connection>,
-        (RedisError, MutexGuard<'a, redis::aio::Connection>),
-    > {
+        conn: &mut MutexGuard<'a, redis::aio::Connection>,
+    ) -> Result<(), RedisError> {
         match self.client.get_async_connection().await {
             Ok(c) => {
-                *conn = c;
-                Ok(conn)
+                **conn = c;
+                Ok(())
             }
-            Err(e) => Err((e, conn)),
+            Err(e) => Err(e),
         }
     }
 }
