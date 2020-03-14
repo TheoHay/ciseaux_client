@@ -90,6 +90,9 @@ impl std::default::Default for ReconnectBehavior {
     }
 }
 
+/// A trait that allow to have a single CiseauxSingle query, and not
+/// a query_x per redis commands types (redis::Cmd and redis::Pipeline).
+/// Implemented for redis::Cmd and redis::Pipeline (including &, and &mut)
 #[async_trait::async_trait]
 pub trait QueryAble {
     async fn query<T: redis::FromRedisValue>(
