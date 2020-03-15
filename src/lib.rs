@@ -37,6 +37,7 @@
 
 pub use redis;
 
+mod cluster;
 mod single;
 #[cfg(test)]
 mod tests;
