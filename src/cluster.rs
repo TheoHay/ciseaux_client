@@ -82,6 +82,12 @@ fn is_read_only(cmd: &redis::Cmd) -> Result<bool, CiseauxError> {
     }
 }
 
+#[derive(Debug)]
+pub struct ClusterInit {
+    pub auto_redirect_read: bool,
+}
+
+#[derive(Clone)]
 struct CiseauxCluster {
     auto_redirect_read: bool,
 }
