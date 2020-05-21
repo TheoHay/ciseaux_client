@@ -1,7 +1,7 @@
 [package]
 name = "ciseaux_client"
 description = "Just a Redis Pool implementation"
-version = "0.3.1-alpha.0"
+version = "0.3.1"
 authors = ["TheoHay <priv.theohay@gmail.com>"]
 keywords = ["redis", "async", "database", "pool"]
 homepage = "https://github.com/TheoHay/ciseaux_client"
@@ -13,7 +13,7 @@ edition = "2018"
 
 [dependencies]
 tokio = { version = "0.2", features=["sync", "time"] }
-redis = "0.15"
+redis = "0.16"
 async-trait = "0.1"
 futures = "0.3"
 num_cpus = "1"
